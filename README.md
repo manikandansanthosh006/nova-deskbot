@@ -1,6 +1,6 @@
 # NOVA
 
-Nova is an interactive desk companion robot built on an ESP32 C6. Its OLED display shows animated eyes that express six emotions: happy, sad, angry, excited, sleepy and surprised. An MPU6050 motion sensor notices when you shake it, so NIMO gets dizzy and then angry. A touch sensor lets you change expressions and switch between display modes. It also works as a digital clock and a world clock, synced over Wi-Fi using NTP.
+Nova is an interactive desk companion robot built on an ESP32 C6. Its OLED display shows animated eyes that express six emotions: happy, sad, angry, excited, sleepy and surprised. An MPU6050 motion sensor notices when you shake it, so Nova gets dizzy and then angry. A touch sensor lets you change expressions and switch between display modes. It also works as a digital clock and a world clock, synced over Wi-Fi using NTP.
 
 ## Hardware
 
