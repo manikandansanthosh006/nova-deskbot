@@ -1,0 +1,1192 @@
+
+ // ==================================================
+ // NIMO - ANIMATED ROBOT FACE + CLOCK + MPU6050
+ // ==================================================
+
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SH110X.h>
+#include <math.h>
+#include <time.h>
+#include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <MPU6050_tockn.h>
+
+MPU6050 mpu6050(Wire);
+
+// ==================================================
+// WIFI CREDENTIALS
+// ==================================================
+
+const char* WIFI_SSID = "FTTH-059D";
+const char* WIFI_PASSWORD = "kvsanthosh123";
+
+const char* TIMEZONE = "IST-5:30";
+
+// ==================================================
+// HARDWARE
+// ==================================================
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+#define SDA_PIN 22
+#define SCL_PIN 23
+#define TOUCH_PIN 2
+
+Adafruit_SH1106G display(128, 64, &Wire, -1);
+
+// ==================================================
+// MOODS
+// ==================================================
+
+#define MOOD_NORMAL     0
+#define MOOD_HAPPY      1
+#define MOOD_SURPRISED  2
+#define MOOD_SLEEPY     3
+#define MOOD_ANGRY      4
+#define MOOD_SAD        5
+#define MOOD_EXCITED    6
+#define MOOD_LOVE       7
+#define MOOD_SUSPICIOUS 8
+#define MOOD_DIZZY      9
+
+int currentMood = MOOD_HAPPY;
+int baseMood = MOOD_HAPPY;
+
+// ==================================================
+// PAGE SYSTEM
+// ==================================================
+
+int currentPage = 0;
+int subPage = 0;
+
+// Page 0 = NIMO face
+// Page 1 = Digital clock
+// Page 1 subPage 1 = World clock
+
+// ==================================================
+// TOUCH VARIABLES
+// ==================================================
+
+bool lastPinState = false;
+bool isLongPressHandled = false;
+
+unsigned long pressStartTime = 0;
+unsigned long lastTapTime = 0;
+
+const unsigned long LONG_PRESS_TIME = 800;
+
+// ==================================================
+// MPU6050 VARIABLES
+// ==================================================
+
+#define CALIBRATION_SAMPLES 100
+
+float calibAngleX = 0;
+float calibAngleY = 0;
+float calibAngleZ = 0;
+
+bool isCalibrated = false;
+
+float currentRoll = 0;
+float currentPitch = 0;
+
+float shakeIntensity = 0;
+
+bool isShaking = false;
+bool isAngry = false;
+
+unsigned long shakeStartTime = 0;
+unsigned long shakeEndTime = 0;
+unsigned long angryEndTime = 0;
+
+const int SHAKE_DURATION = 1500;
+const int ANGRY_DURATION = 2000;
+
+float targetPupilX = 0;
+float targetPupilY = 0;
+
+float currentPupilX = 0;
+float currentPupilY = 0;
+
+float lastAccelX = 0;
+float lastAccelY = 0;
+float lastAccelZ = 0;
+
+// ==================================================
+// EMOTION IMAGES
+// ==================================================
+
+const unsigned char bmp_dizzy_stars[] PROGMEM = {
+  0x08,0x20,0x14,0x50,0x22,0x88,0x41,0x04,
+  0x82,0x02,0x41,0x04,0x22,0x88,0x14,0x50,
+  0x08,0x20,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+const unsigned char bmp_angry_mark[] PROGMEM = {
+  0x00,0x00,0x00,0x00,0x08,0x00,0x1c,0x00,
+  0x3e,0x00,0x7f,0x00,0x3e,0x00,0x1c,0x00,
+  0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+const unsigned char bmp_heart[] PROGMEM = {
+  0x00,0x00,0x0c,0x60,0x1e,0xf0,0x3f,0xf8,
+  0x7f,0xfc,0x7f,0xfc,0x7f,0xfc,0x3f,0xf8,
+  0x1f,0xf0,0x0f,0xe0,0x07,0xc0,0x03,0x80,
+  0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+const unsigned char bmp_zzz[] PROGMEM = {
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x3c,
+  0x00,0x0c,0x00,0x18,0x00,0x30,0x00,0x7e,
+  0x00,0x00,0x3c,0x00,0x0c,0x00,0x18,0x00,
+  0x30,0x00,0x7c,0x00,0x00,0x00,0x00,0x00
+};
+
+// ==================================================
+// EYE PHYSICS
+// ==================================================
+
+struct Eye {
+
+  float x, y, w, h;
+  float targetX, targetY, targetW, targetH;
+
+  float pupilX, pupilY;
+  float targetPupilX, targetPupilY;
+
+  float velX, velY, velW, velH;
+  float pVelX, pVelY;
+
+  float k = 0.15;
+  float d = 0.65;
+  float pk = 0.2;
+  float pd = 0.6;
+
+  bool blinking = false;
+
+  unsigned long lastBlink = 0;
+  unsigned long nextBlinkTime = 0;
+
+  void init(float _x, float _y, float _w, float _h) {
+
+    x = targetX = _x;
+    y = targetY = _y;
+
+    w = targetW = _w;
+    h = targetH = _h;
+
+    pupilX = targetPupilX = 0;
+    pupilY = targetPupilY = 0;
+
+    velX = velY = velW = velH = 0;
+    pVelX = pVelY = 0;
+
+    nextBlinkTime = millis() + random(1000, 4000);
+  }
+
+  void update() {
+
+    float ax = (targetX - x) * k;
+    float ay = (targetY - y) * k;
+
+    float aw = (targetW - w) * k;
+    float ah = (targetH - h) * k;
+
+    velX = (velX + ax) * d;
+    velY = (velY + ay) * d;
+
+    velW = (velW + aw) * d;
+    velH = (velH + ah) * d;
+
+    x += velX;
+    y += velY;
+
+    w += velW;
+    h += velH;
+
+    float pax = (targetPupilX - pupilX) * pk;
+    float pay = (targetPupilY - pupilY) * pk;
+
+    pVelX = (pVelX + pax) * pd;
+    pVelY = (pVelY + pay) * pd;
+
+    pupilX += pVelX;
+    pupilY += pVelY;
+  }
+};
+
+Eye leftEye;
+Eye rightEye;
+
+// ==================================================
+// MPU6050 CALIBRATION
+// ==================================================
+
+void calibrateMPU6050() {
+
+  display.clearDisplay();
+  display.setFont(NULL);
+
+  display.setCursor(20, 20);
+  display.print("Calibrating...");
+
+  display.setCursor(10, 35);
+  display.print("Keep device STILL");
+
+  display.display();
+
+  float sumX = 0;
+  float sumY = 0;
+  float sumZ = 0;
+
+  for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
+
+    mpu6050.update();
+
+    sumX += mpu6050.getAngleX();
+    sumY += mpu6050.getAngleY();
+    sumZ += mpu6050.getAngleZ();
+
+    delay(10);
+  }
+
+  calibAngleX = sumX / CALIBRATION_SAMPLES;
+  calibAngleY = sumY / CALIBRATION_SAMPLES;
+  calibAngleZ = sumZ / CALIBRATION_SAMPLES;
+
+  isCalibrated = true;
+
+  display.clearDisplay();
+  display.setCursor(25, 30);
+  display.print("Calibrated!");
+  display.display();
+
+  delay(1000);
+}
+
+// ==================================================
+// MPU6050 MOTION
+// ==================================================
+
+void updateMotion() {
+
+  if (!isCalibrated) return;
+
+  mpu6050.update();
+
+  currentRoll = mpu6050.getAngleX() - calibAngleX;
+  currentPitch = mpu6050.getAngleY() - calibAngleY;
+
+  float accelX = mpu6050.getAccX();
+  float accelY = mpu6050.getAccY();
+  float accelZ = mpu6050.getAccZ();
+
+  float deltaX = fabs(accelX - lastAccelX);
+  float deltaY = fabs(accelY - lastAccelY);
+  float deltaZ = fabs(accelZ - lastAccelZ);
+
+  shakeIntensity = (deltaX + deltaY + deltaZ) * 10;
+
+  if (shakeIntensity > 20.0 &&
+      !isShaking && !isAngry &&
+      currentPage == 0) {
+
+    isShaking = true;
+
+    shakeStartTime = millis();
+    shakeEndTime = millis() + SHAKE_DURATION;
+
+    currentMood = MOOD_DIZZY;
+  }
+
+  if (isShaking && millis() >= shakeEndTime) {
+
+    isShaking = false;
+    isAngry = true;
+
+    angryEndTime = millis() + ANGRY_DURATION;
+
+    currentMood = MOOD_ANGRY;
+  }
+
+  if (isAngry && millis() >= angryEndTime) {
+
+    isAngry = false;
+
+    currentMood = baseMood;
+  }
+
+  // Eye tracking
+
+  if (!isShaking && !isAngry && currentPage == 0) {
+
+    float rawX = currentRoll / 5.0;
+    float rawY = currentPitch / 5.0;
+
+    targetPupilX = constrain(rawX, -12, 12);
+    targetPupilY = constrain(rawY, -10, 10);
+
+    currentPupilX =
+      currentPupilX * 0.6 + targetPupilX * 0.4;
+
+    currentPupilY =
+      currentPupilY * 0.6 + targetPupilY * 0.4;
+
+    leftEye.targetPupilX = currentPupilX;
+    leftEye.targetPupilY = currentPupilY;
+
+    rightEye.targetPupilX = currentPupilX;
+    rightEye.targetPupilY = currentPupilY;
+
+    leftEye.targetX = 28 + (currentRoll / 15);
+    leftEye.targetY = 18 + (currentPitch / 15);
+
+    rightEye.targetX = 80 + (currentRoll / 15);
+    rightEye.targetY = 18 + (currentPitch / 15);
+  }
+
+  lastAccelX = accelX;
+  lastAccelY = accelY;
+  lastAccelZ = accelZ;
+}
+
+// ==================================================
+// TOUCH HANDLER
+// ==================================================
+
+void handleTouch() {
+
+  bool currentPinState = digitalRead(TOUCH_PIN);
+  unsigned long now = millis();
+
+  if (currentPinState && !lastPinState) {
+
+    pressStartTime = now;
+    isLongPressHandled = false;
+  }
+
+  else if (currentPinState && lastPinState) {
+
+    if (now - pressStartTime > LONG_PRESS_TIME &&
+        !isLongPressHandled) {
+
+      if (currentPage == 0) {
+
+        if (!isShaking && !isAngry) {
+
+          baseMood++;
+
+          if (baseMood > MOOD_SUSPICIOUS) {
+            baseMood = MOOD_NORMAL;
+          }
+
+          currentMood = baseMood;
+        }
+      }
+
+      else if (currentPage == 1) {
+
+        subPage = (subPage == 1) ? 0 : 1;
+      }
+
+      isLongPressHandled = true;
+    }
+  }
+
+  else if (!currentPinState && lastPinState) {
+
+    if (now - pressStartTime < LONG_PRESS_TIME &&
+        !isLongPressHandled) {
+
+      // Short touch changes page
+
+      if (currentPage == 0) {
+        currentPage = 1;
+        subPage = 0;
+      }
+
+      else {
+        currentPage = 0;
+        subPage = 0;
+      }
+    }
+  }
+
+  lastPinState = currentPinState;
+}
+
+// ==================================================
+// DIZZY EYES
+// ==================================================
+
+void drawDizzyEye(Eye& e, bool isLeft) {
+
+  int ix = (int)e.x;
+  int iy = (int)e.y;
+  int iw = (int)e.w;
+  int ih = (int)e.h;
+
+  int cx = ix + iw / 2;
+  int cy = iy + ih / 2;
+
+  display.fillCircle(cx, cy, iw / 2, SH110X_WHITE);
+
+  unsigned long now = millis();
+
+  float angle = (now - shakeStartTime) * 0.025;
+
+  int radius = iw / 3;
+
+  int pupilX = cx + cos(angle) * radius;
+  int pupilY = cy + sin(angle) * radius;
+
+  display.fillCircle(pupilX, pupilY, 4, SH110X_BLACK);
+
+  display.fillCircle(
+    pupilX + 2, pupilY - 2, 1, SH110X_WHITE
+  );
+
+  int pupilX2 = cx - cos(angle) * radius;
+  int pupilY2 = cy - sin(angle) * radius;
+
+  display.fillCircle(pupilX2, pupilY2, 3, SH110X_BLACK);
+
+  int starOffset = (now / 80) % 4;
+
+  display.drawBitmap(
+    6 - starOffset, 0,
+    bmp_dizzy_stars, 16, 16, SH110X_WHITE
+  );
+
+  display.drawBitmap(
+    106 + starOffset, 0,
+    bmp_dizzy_stars, 16, 16, SH110X_WHITE
+  );
+}
+
+// ==================================================
+// ANGRY EYES
+// ==================================================
+
+void drawAngryEye(Eye& e, bool isLeft) {
+
+  int ix = (int)e.x;
+  int iy = (int)e.y;
+
+  int iw = (int)e.w;
+  int ih = (int)e.h;
+
+  display.fillRoundRect(ix, iy, iw, ih, 8, SH110X_WHITE);
+
+  int cx = ix + iw / 2;
+  int cy = iy + ih / 2;
+
+  int pupilSize = iw / 2.5;
+
+  int px = cx - 2;
+  int py = cy;
+
+  display.fillRoundRect(
+    px - pupilSize / 2,
+    py - pupilSize / 2,
+    pupilSize,
+    pupilSize,
+    pupilSize / 2,
+    SH110X_BLACK
+  );
+
+  if (isLeft) {
+
+    for (int i = 0; i < 8; i++) {
+
+      display.drawLine(
+        ix - 2, iy - 2 + i,
+        ix + iw + 2, iy + 6 + i,
+        SH110X_BLACK
+      );
+    }
+
+    display.drawBitmap(
+      ix - 12, iy - 6,
+      bmp_angry_mark, 16, 16, SH110X_WHITE
+    );
+  }
+
+  else {
+
+    for (int i = 0; i < 8; i++) {
+
+      display.drawLine(
+        ix - 2, iy + 6 + i,
+        ix + iw + 2, iy - 2 + i,
+        SH110X_BLACK
+      );
+    }
+
+    display.drawBitmap(
+      ix + iw - 4, iy - 6,
+      bmp_angry_mark, 16, 16, SH110X_WHITE
+    );
+  }
+}
+
+// ==================================================
+// NORMAL EYES
+// ==================================================
+
+void drawNormalEye(Eye& e, bool isLeft) {
+
+  int ix = (int)e.x;
+  int iy = (int)e.y;
+
+  int iw = (int)e.w;
+  int ih = (int)e.h;
+
+  int r = (iw < 20) ? 3 : 8;
+
+  display.fillRoundRect(ix, iy, iw, ih, r, SH110X_WHITE);
+
+  int cx = ix + iw / 2;
+  int cy = iy + ih / 2;
+
+  int pw = iw / 2.2;
+  int ph = ih / 2.2;
+
+  int px = cx + (int)e.pupilX - pw / 2;
+  int py = cy + (int)e.pupilY - ph / 2;
+
+  if (px < ix) px = ix;
+  if (px + pw > ix + iw) px = ix + iw - pw;
+
+  if (py < iy) py = iy;
+  if (py + ph > iy + ih) py = iy + ih - ph;
+
+  display.fillRoundRect(
+    px, py, pw, ph, r / 2, SH110X_BLACK
+  );
+
+  if (iw > 15 && ih > 15) {
+
+    display.fillCircle(
+      px + pw - 4, py + 4, 2, SH110X_WHITE
+    );
+  }
+
+  if (currentMood == MOOD_HAPPY ||
+      currentMood == MOOD_LOVE) {
+
+    display.fillRect(
+      ix, iy + ih - 10, iw, 12, SH110X_BLACK
+    );
+  }
+
+  else if (currentMood == MOOD_SLEEPY) {
+
+    display.fillRect(
+      ix, iy, iw, ih / 2, SH110X_BLACK
+    );
+  }
+
+  else if (currentMood == MOOD_SAD) {
+
+    if (isLeft) {
+
+      for (int i = 0; i < 8; i++) {
+
+        display.drawLine(
+          ix, iy + i,
+          ix + iw, iy + 4 + i,
+          SH110X_BLACK
+        );
+      }
+    }
+
+    else {
+
+      for (int i = 0; i < 8; i++) {
+
+        display.drawLine(
+          ix, iy + 4 + i,
+          ix + iw, iy + i,
+          SH110X_BLACK
+        );
+      }
+    }
+  }
+}
+
+// ==================================================
+// MOUTH
+// ==================================================
+
+void drawMouth() {
+
+  int mx = 64;
+  int my = 54;
+
+  if (currentMood == MOOD_DIZZY && isShaking) {
+
+    unsigned long now = millis();
+
+    for (int i = -8; i <= 8; i++) {
+
+      int y = my + sin(i * 0.8 + now * 0.03) * 4;
+
+      display.drawPixel(mx + i, y, SH110X_WHITE);
+    }
+
+    return;
+  }
+
+  if (currentMood == MOOD_ANGRY && isAngry) {
+
+    display.fillRect(
+      mx - 8, my - 2, 16, 5, SH110X_BLACK
+    );
+
+    for (int i = -5; i <= 5; i += 3) {
+
+      display.drawLine(
+        mx + i, my - 2,
+        mx + i, my + 2,
+        SH110X_WHITE
+      );
+    }
+
+    return;
+  }
+
+  switch (currentMood) {
+
+    case MOOD_HAPPY:
+
+      for (int i = -6; i <= 6; i++) {
+
+        int y = my - (i * i / 16);
+
+        if (y < my + 2) {
+          display.drawPixel(mx + i, y, SH110X_WHITE);
+        }
+      }
+
+      break;
+
+    case MOOD_SAD:
+
+      for (int i = -6; i <= 6; i++) {
+
+        int y = my + 2 + (i * i / 16);
+
+        display.drawPixel(mx + i, y, SH110X_WHITE);
+      }
+
+      break;
+
+    case MOOD_SURPRISED:
+
+      display.fillCircle(mx, my + 1, 3, SH110X_BLACK);
+      display.drawCircle(mx, my + 1, 3, SH110X_WHITE);
+
+      break;
+
+    case MOOD_SLEEPY:
+
+      display.drawLine(
+        mx - 4, my, mx + 4, my, SH110X_WHITE
+      );
+
+      break;
+
+    case MOOD_LOVE:
+
+      display.drawBitmap(
+        mx - 6, my - 2,
+        bmp_heart, 12, 12, SH110X_WHITE
+      );
+
+      break;
+
+    default:
+
+      display.drawLine(
+        mx - 4, my, mx + 4, my, SH110X_WHITE
+      );
+
+      break;
+  }
+}
+
+// ==================================================
+// EYE BLINKING
+// ==================================================
+
+void updateEyePhysics() {
+
+  unsigned long now = millis();
+
+  int blinkDelay = (isShaking || isAngry) ? 60 : 120;
+
+  int blinkMin = (isShaking || isAngry) ? 300 : 2000;
+  int blinkMax = (isShaking || isAngry) ? 800 : 6000;
+
+  if (now > leftEye.nextBlinkTime) {
+
+    leftEye.blinking = true;
+    rightEye.blinking = true;
+
+    leftEye.lastBlink = now;
+
+    leftEye.nextBlinkTime =
+      now + random(blinkMin, blinkMax);
+  }
+
+  if (leftEye.blinking) {
+
+    leftEye.targetH = 2;
+    rightEye.targetH = 2;
+
+    if (now - leftEye.lastBlink > blinkDelay) {
+
+      leftEye.blinking = false;
+      rightEye.blinking = false;
+
+      leftEye.targetH = 32;
+      rightEye.targetH = 32;
+    }
+  }
+
+  leftEye.update();
+  rightEye.update();
+}
+
+// ==================================================
+// EMOTION PAGE
+// ==================================================
+
+void drawEmoPage() {
+
+  updateEyePhysics();
+
+  if (currentMood == MOOD_DIZZY && isShaking) {
+
+    drawDizzyEye(leftEye, true);
+    drawDizzyEye(rightEye, false);
+  }
+
+  else if (currentMood == MOOD_ANGRY && isAngry) {
+
+    drawAngryEye(leftEye, true);
+    drawAngryEye(rightEye, false);
+  }
+
+  else {
+
+    drawNormalEye(leftEye, true);
+    drawNormalEye(rightEye, false);
+  }
+
+  drawMouth();
+
+  if (!isShaking && !isAngry) {
+
+    if (currentMood == MOOD_LOVE) {
+
+      display.drawBitmap(
+        56, 0, bmp_heart, 16, 16, SH110X_WHITE
+      );
+    }
+
+    else if (currentMood == MOOD_SLEEPY) {
+
+      display.drawBitmap(
+        110, 0, bmp_zzz, 16, 16, SH110X_WHITE
+      );
+    }
+  }
+}
+
+// ==================================================
+// DIGITAL CLOCK
+// ==================================================
+
+void drawClockPage() {
+
+  struct tm t;
+
+  if (!getLocalTime(&t, 100)) {
+
+    display.setFont(NULL);
+    display.setCursor(30, 30);
+    display.print("Syncing...");
+    return;
+  }
+
+  String ampm = (t.tm_hour >= 12) ? "PM" : "AM";
+
+  int h12 = t.tm_hour % 12;
+
+  if (h12 == 0) h12 = 12;
+
+  display.setTextColor(SH110X_WHITE);
+
+  display.setFont(NULL);
+  display.setCursor(108, 0);
+  display.print(ampm);
+
+  display.setFont(&FreeSansBold18pt7b);
+
+  char timeStr[6];
+
+  sprintf(timeStr, "%02d:%02d", h12, t.tm_min);
+
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  display.getTextBounds(
+    timeStr, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.setCursor((SCREEN_WIDTH - w) / 2, 42);
+  display.print(timeStr);
+
+  display.setFont(&FreeSans9pt7b);
+
+  char dateStr[20];
+
+  strftime(dateStr, sizeof(dateStr), "%a, %b %d", &t);
+
+  display.getTextBounds(
+    dateStr, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.setCursor((SCREEN_WIDTH - w) / 2, 61);
+  display.print(dateStr);
+}
+
+// ==================================================
+// WORLD CLOCK TIME CONVERSION
+// ==================================================
+
+void getTimeInZone(
+  time_t epoch,
+  const char* timezone,
+  struct tm* result
+) {
+
+  setenv("TZ", timezone, 1);
+  tzset();
+
+  localtime_r(&epoch, result);
+
+  // Restore Indian Standard Time
+
+  setenv("TZ", TIMEZONE, 1);
+  tzset();
+}
+
+// ==================================================
+// WORLD CLOCK
+// ==================================================
+
+void drawWorldClockPage() {
+
+  time_t now;
+  time(&now);
+
+  struct tm indiaTime;
+  struct tm londonTime;
+  struct tm newYorkTime;
+
+  getTimeInZone(
+    now, "IST-5:30", &indiaTime
+  );
+
+  getTimeInZone(
+    now, "GMT0BST,M3.5.0/1,M10.5.0/2",
+    &londonTime
+  );
+
+  getTimeInZone(
+    now, "EST5EDT,M3.2.0/2,M11.1.0/2",
+    &newYorkTime
+  );
+
+  display.fillRect(0, 0, 128, 14, SH110X_WHITE);
+
+  display.setFont(NULL);
+  display.setTextColor(SH110X_BLACK);
+
+  String title = "WORLD CLOCK";
+
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  display.getTextBounds(
+    title, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.setCursor((128 - w) / 2, 4);
+  display.print(title);
+
+  display.setTextColor(SH110X_WHITE);
+
+  display.drawLine(42, 16, 42, 63, SH110X_WHITE);
+  display.drawLine(85, 16, 85, 63, SH110X_WHITE);
+
+  display.setFont(NULL);
+
+  display.setCursor(12, 18);
+  display.print("IND");
+
+  display.setCursor(52, 18);
+  display.print("LDN");
+
+  display.setCursor(94, 18);
+  display.print("NYC");
+
+  char jStr[10];
+  char lStr[10];
+  char nStr[10];
+
+  sprintf(
+    jStr, "%02d:%02d",
+    indiaTime.tm_hour, indiaTime.tm_min
+  );
+
+  sprintf(
+    lStr, "%02d:%02d",
+    londonTime.tm_hour, londonTime.tm_min
+  );
+
+  sprintf(
+    nStr, "%02d:%02d",
+    newYorkTime.tm_hour, newYorkTime.tm_min
+  );
+
+  display.getTextBounds(
+    jStr, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.setCursor(21 - w / 2, 48);
+  display.print(jStr);
+
+  display.getTextBounds(
+    lStr, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.setCursor(64 - w / 2, 48);
+  display.print(lStr);
+
+  display.getTextBounds(
+    nStr, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.setCursor(106 - w / 2, 48);
+  display.print(nStr);
+}
+
+// ==================================================
+// BOOT ANIMATION
+// ==================================================
+
+void playBootAnimation() {
+
+  display.setTextColor(SH110X_WHITE);
+
+  int cx = 64;
+  int cy = 32;
+
+  for (int r = 0; r < 80; r += 4) {
+
+    display.clearDisplay();
+
+    display.fillCircle(
+      cx, cy, r, SH110X_WHITE
+    );
+
+    display.display();
+
+    delay(8);
+  }
+
+  for (int r = 0; r < 80; r += 4) {
+
+    display.clearDisplay();
+
+    display.fillCircle(
+      cx, cy, 80, SH110X_WHITE
+    );
+
+    display.fillCircle(
+      cx, cy, r, SH110X_BLACK
+    );
+
+    display.display();
+
+    delay(8);
+  }
+
+  display.setFont(NULL);
+
+  String bootText = "NOVA";
+
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  display.getTextBounds(
+    bootText, 0, 0, &x1, &y1, &w, &h
+  );
+
+  display.clearDisplay();
+
+  display.setCursor(
+    (SCREEN_WIDTH - w) / 2, 36
+  );
+
+  display.print(bootText);
+
+  display.display();
+
+  delay(2000);
+}
+
+// ==================================================
+// SETUP
+// ==================================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  delay(500);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  pinMode(TOUCH_PIN, INPUT_PULLUP);
+
+  display.begin(0x3C, true);
+
+  display.setTextColor(SH110X_WHITE);
+
+  display.clearDisplay();
+
+  // MPU6050
+
+  mpu6050.begin();
+
+  calibrateMPU6050();
+
+  // Initialize eyes
+
+  leftEye.init(28, 18, 32, 32);
+
+  rightEye.init(80, 18, 32, 32);
+
+  // Boot animation
+
+  playBootAnimation();
+
+  // WiFi connection for clock only
+
+  display.clearDisplay();
+
+  display.setFont(NULL);
+  display.setCursor(20, 30);
+  display.print("Connecting WiFi");
+
+  display.display();
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long wifiStart = millis();
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - wifiStart < 15000
+  ) {
+
+    delay(500);
+
+    display.print(".");
+    display.display();
+  }
+
+  // Time synchronization
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    display.clearDisplay();
+
+    display.setCursor(25, 30);
+    display.print("WiFi Connected!");
+
+    display.display();
+
+    delay(1000);
+
+    setenv("TZ", TIMEZONE, 1);
+    tzset();
+
+    configTime(
+      0, 0,
+      "pool.ntp.org",
+      "time.nist.gov"
+    );
+
+  }
+
+  else {
+
+    display.clearDisplay();
+
+    display.setCursor(15, 30);
+    display.print("WiFi Failed!");
+
+    display.display();
+
+    delay(2000);
+  }
+
+  display.clearDisplay();
+  display.display();
+}
+
+// ==================================================
+// MAIN LOOP
+// ==================================================
+
+void loop() {
+
+  handleTouch();
+
+  updateMotion();
+
+  display.clearDisplay();
+
+  if (currentPage == 0) {
+
+    drawEmoPage();
+  }
+
+  else if (currentPage == 1) {
+
+    if (subPage == 1) {
+
+      drawWorldClockPage();
+    }
+
+    else {
+
+      drawClockPage();
+    }
+  }
+
+  display.display();
+
+  delay(20);
+}
