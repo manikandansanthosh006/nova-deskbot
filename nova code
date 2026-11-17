@@ -1,6 +1,6 @@
 
  // ==================================================
- // NIMO - ANIMATED ROBOT FACE + CLOCK + MPU6050
+ // Nova - ANIMATED ROBOT FACE + CLOCK + MPU6050
  // ==================================================
 
 #include <WiFi.h>
@@ -19,8 +19,8 @@ MPU6050 mpu6050(Wire);
 // WIFI CREDENTIALS
 // ==================================================
 
-const char* WIFI_SSID = "FTTH-059D";
-const char* WIFI_PASSWORD = "kvsanthosh123";
+const char* WIFI_SSID = "your wifi name";
+const char* WIFI_PASSWORD = "password";
 
 const char* TIMEZONE = "IST-5:30";
 
